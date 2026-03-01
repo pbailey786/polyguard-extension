@@ -1,112 +1,244 @@
-// PolyGuard Popup Dashboard Script
+// PolyGuard Popup Dashboard Script - Enhanced with Market Detection
 
-const addOrderBtn = document.getElementById('addOrderBtn');
-const marketIdInput = document.getElementById('marketId');
-const marketNameInput = document.getElementById('marketName');
-const stopPriceInput = document.getElementById('stopPrice');
-const ordersList = document.getElementById('ordersList');
-const connectWalletBtn = document.getElementById('connectWallet');
-const walletAddressDiv = document.getElementById('walletAddress');
+let marketData = null;
+let orders = [];
 
-// Load orders on popup open
+// Initialize popup on load
 document.addEventListener('DOMContentLoaded', () => {
-  loadOrders();
-  checkWalletConnection();
+  initPopup();
 });
 
-// Add order
-addOrderBtn.addEventListener('click', () => {
-  const marketId = marketIdInput.value.trim();
-  const marketName = marketNameInput.value.trim();
-  const stopPrice = parseFloat(stopPriceInput.value);
+async function initPopup() {
+  const appDiv = document.getElementById('app');
   
-  if (!marketId || !marketName || !stopPrice) {
-    alert('Please fill in all fields');
+  try {
+    // Check if we're on Polymarket
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const isPolymarket = tab.url?.includes('polymarket.com');
+    
+    if (!isPolymarket) {
+      // Show "Only works on polymarket.com" message
+      renderNotPolymarket(appDiv);
+      return;
+    }
+    
+    // Try to get market data from content script
+    try {
+      const response = await chrome.tabs.sendMessage(tab.id, { action: 'getMarketData' });
+      marketData = response?.marketData;
+      console.log('Market data received:', marketData);
+    } catch (err) {
+      console.log('Could not get market data from content script');
+    }
+    
+    // Render the main UI
+    renderMainUI(appDiv);
+    
+    // Load orders
+    await loadOrders();
+    updateOrdersDisplay(appDiv);
+    
+  } catch (err) {
+    console.error('Error initializing popup:', err);
+    appDiv.innerHTML = '<div class="loading"><p>Error loading popup</p></div>';
+  }
+}
+
+function renderNotPolymarket(container) {
+  container.innerHTML = `
+    <div class="header">
+      <h1>🎩 PolyGuard</h1>
+      <p class="version">v1.0.0</p>
+    </div>
+    <div class="not-polymarket">
+      <div class="icon">🎩</div>
+      <h2>PolyGuard</h2>
+      <p class="subtitle">Stop-Loss Orders for Polymarket</p>
+      <p class="message">Only works on polymarket.com</p>
+      <p class="hint">Navigate to a Polymarket page to use this extension</p>
+    </div>
+  `;
+}
+
+function renderMainUI(container) {
+  let marketSection = '';
+  let manualWarning = '';
+  
+  if (marketData && marketData.detected) {
+    marketSection = `
+      <section>
+        <h3>Market Detected</h3>
+        <div class="market-card">
+          <div class="market-field">
+            <label>Market Name</label>
+            <p class="market-value">${escapeHtml(marketData.marketName)}</p>
+          </div>
+          <div class="market-field">
+            <label>Market ID</label>
+            <p class="market-value monospace">${marketData.marketId.substring(0, 12)}...</p>
+          </div>
+          <div class="market-row">
+            <div class="market-field">
+              <label>Current Price</label>
+              <p class="market-value highlight">$${marketData.currentPrice.toFixed(2)}</p>
+            </div>
+            <div class="market-field">
+              <label>Yes/No</label>
+              <p class="market-value">$${marketData.yes.toFixed(2)} / $${marketData.no.toFixed(2)}</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+  } else if (marketData) {
+    manualWarning = `
+      <section>
+        <div class="info-box">
+          <p>⚠️ Could not auto-detect market. Enter details manually.</p>
+        </div>
+      </section>
+    `;
+  }
+  
+  const suggestedStop = marketData && marketData.currentPrice > 0 
+    ? (marketData.currentPrice * 0.9).toFixed(2) 
+    : '';
+  
+  container.innerHTML = `
+    <div class="header">
+      <h1>🎩 PolyGuard</h1>
+      <p class="version">v1.0.0</p>
+    </div>
+    
+    ${marketSection}
+    ${manualWarning}
+    
+    <section>
+      <h3>Set Stop-Loss</h3>
+      
+      <div class="form-group">
+        <label>Stop Price ($)</label>
+        ${suggestedStop ? `<p class="suggestion">Suggested: <strong>$${suggestedStop}</strong> (10% below current)</p>` : ''}
+        <input type="number" id="stopPriceInput" step="0.01" min="0" max="1" placeholder="Enter stop price" />
+      </div>
+      
+      <button id="addOrderBtn" class="btn-primary">Set Stop Loss 🎯</button>
+    </section>
+    
+    <section id="ordersSection" style="display: none;">
+      <h3>Active Orders</h3>
+      <div id="ordersList" class="orders-list">
+        <div class="empty-state">Loading orders...</div>
+      </div>
+    </section>
+    
+    <footer class="footer">
+      <p class="status">✓ Ready to use</p>
+    </footer>
+  `;
+  
+  // Pre-fill suggested stop price
+  if (suggestedStop) {
+    document.getElementById('stopPriceInput').value = suggestedStop;
+  }
+  
+  // Bind add order button
+  document.getElementById('addOrderBtn').addEventListener('click', addOrder);
+}
+
+function updateOrdersDisplay(container) {
+  const ordersSection = container.querySelector('#ordersSection');
+  const ordersList = container.querySelector('#ordersList');
+  
+  if (!orders || orders.length === 0) {
+    ordersSection.style.display = 'none';
     return;
   }
+  
+  ordersSection.style.display = 'block';
+  ordersList.innerHTML = orders.map(order => `
+    <div class="order-card">
+      <div class="order-info">
+        <p class="order-market">${escapeHtml(order.marketName)}</p>
+        <p class="order-details">
+          Stop: <strong>$${order.stopPrice.toFixed(2)}</strong>
+          ${order.currentPrice ? ` | Current: <strong>$${order.currentPrice.toFixed(2)}</strong>` : ''}
+        </p>
+        <p class="order-id">${order.marketId.substring(0, 8)}...</p>
+      </div>
+      <button class="btn-remove" onclick="removeOrder('${order.id}')">✕</button>
+    </div>
+  `).join('');
+}
+
+async function addOrder() {
+  const stopPriceInput = document.getElementById('stopPriceInput');
+  const stopPrice = parseFloat(stopPriceInput.value);
+  
+  if (!stopPrice || stopPrice <= 0) {
+    alert('Please enter a valid stop price');
+    return;
+  }
+  
+  const order = {
+    marketId: marketData?.marketId || 'manual',
+    marketName: marketData?.marketName || 'Manual Order',
+    stopPrice: stopPrice,
+    currentPrice: marketData?.currentPrice || 0,
+  };
   
   chrome.runtime.sendMessage(
     {
       type: 'ADD_ORDER',
-      order: { marketId, marketName, stopPrice }
+      order,
     },
-    (order) => {
-      console.log('Order added:', order);
-      marketIdInput.value = '';
-      marketNameInput.value = '';
-      stopPriceInput.value = '';
-      loadOrders();
+    async (result) => {
+      if (result) {
+        stopPriceInput.value = '';
+        await loadOrders();
+        const appDiv = document.getElementById('app');
+        updateOrdersDisplay(appDiv);
+      }
     }
   );
-});
-
-// Load and display orders
-function loadOrders() {
-  chrome.runtime.sendMessage({ type: 'GET_ORDERS' }, (orders) => {
-    if (!orders || orders.length === 0) {
-      ordersList.innerHTML = '<div class="empty-state">No active orders</div>';
-    } else {
-      ordersList.innerHTML = orders.map(order => `
-        <div class="order-item">
-          <div class="order-details">
-            <div class="order-name">${order.marketName}</div>
-            <div class="order-price">Stop: $${order.stopPrice.toFixed(4)} | ID: ${order.marketId.substring(0, 8)}...</div>
-          </div>
-          <button class="danger" onclick="removeOrder('${order.id}')" style="width: auto; padding: 4px 8px; font-size: 11px;">Remove</button>
-        </div>
-      `).join('');
-    }
-  });
 }
 
-// Remove order
-function removeOrder(orderId) {
+async function removeOrder(orderId) {
   chrome.runtime.sendMessage(
     { type: 'REMOVE_ORDER', orderId },
-    () => {
-      loadOrders();
+    async () => {
+      await loadOrders();
+      const appDiv = document.getElementById('app');
+      updateOrdersDisplay(appDiv);
     }
   );
 }
 
-// EIP-6963: Connect wallet
-connectWalletBtn.addEventListener('click', connectWallet);
-
-function connectWallet() {
-  // EIP-6963 wallet discovery
-  const event = new Event('eip6963:requestProvider');
-  window.dispatchEvent(event);
-  
-  window.addEventListener('eip6963:announceProvider', handleWalletAnnouncement);
-}
-
-function handleWalletAnnouncement(event) {
-  const { detail } = event;
-  const provider = detail.provider;
-  
-  if (provider) {
-    // Request account access
-    provider.request({ method: 'eth_requestAccounts' })
-      .then(accounts => {
-        const address = accounts[0];
-        chrome.storage.local.set({ 'polyguard_wallet': address });
-        walletAddressDiv.textContent = address;
-        connectWalletBtn.textContent = 'Wallet Connected ✓';
-        connectWalletBtn.disabled = true;
-      })
-      .catch(err => console.error('Wallet connection failed:', err));
-  }
-}
-
-function checkWalletConnection() {
-  chrome.storage.local.get('polyguard_wallet', (result) => {
-    if (result.polyguard_wallet) {
-      walletAddressDiv.textContent = result.polyguard_wallet;
-      connectWalletBtn.textContent = 'Wallet Connected ✓';
-      connectWalletBtn.disabled = true;
-    }
+async function loadOrders() {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'GET_ORDERS' }, (result) => {
+      orders = result || [];
+      resolve();
+    });
   });
+}
+
+function escapeHtml(text) {
+  const map = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;'
+  };
+  return text.replace(/[&<>"']/g, m => map[m]);
 }
 
 // Refresh orders every 5 seconds
-setInterval(loadOrders, 5000);
+setInterval(async () => {
+  await loadOrders();
+  const appDiv = document.getElementById('app');
+  if (appDiv) {
+    updateOrdersDisplay(appDiv);
+  }
+}, 5000);

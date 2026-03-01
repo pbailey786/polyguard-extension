@@ -18,9 +18,12 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://polymarket.com/*"],
-      "js": ["src/content-script.js"],
-      "run_at": "document_start"
+      "matches": [
+        "https://polymarket.com/*",
+        "https://www.polymarket.com/*"
+      ],
+      "js": ["src/content.js"],
+      "run_at": "document_end"
     }
   ],
   "action": {
