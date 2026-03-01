@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "PolyGuard - Stop-Loss Orders",
+  "version": "0.1.0",
+  "description": "Stop-loss order management for Polymarket",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "storage",
+    "offscreen"
+  ],
+  "host_permissions": [
+    "https://polymarket.com/*",
+    "https://clob.polymarket.com/*",
+    "wss://ws-subscriptions-clob.polymarket.com/*"
+  ],
+  "background": {
+    "service_worker": "src/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://polymarket.com/*"],
+      "js": ["src/content-script.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "PolyGuard"
+  },
+  "offscreen_documents": [
+    {
+      "document": "src/offscreen.html",
+      "matches": ["https://polymarket.com/*"],
+      "reasons": ["WEB_RTC_FROM_HIDDEN_DOCUMENT"]
+    }
+  ],
+  "icons": {
+    "16": "public/icon-16.png",
+    "48": "public/icon-48.png",
+    "128": "public/icon-128.png"
+  }
+}

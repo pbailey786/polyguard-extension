@@ -1,0 +1,14 @@
+{
+  "name": "polyguard-phase1",
+  "version": "0.1.0",
+  "description": "Stop-loss orders extension for Polymarket - Phase 1 MVP",
+  "main": "index.js",
+  "scripts": {
+    "build": "mkdir -p dist && cp -r src public manifest.json dist/",
+    "dev": "npm run build && echo 'Extension ready in dist/ folder'",
+    "clean": "rm -rf dist"
+  },
+  "keywords": ["polymarket", "stop-loss", "chrome-extension"],
+  "author": "PolyGuard",
+  "license": "MIT"
+}
