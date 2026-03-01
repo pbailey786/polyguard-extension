@@ -1,6 +1,215 @@
 // PolyGuard Popup - Enhanced with Market Detection and Smart Stop Suggestions
 import React, { useEffect, useState } from 'react';
 
+// Event Page UI Component
+interface EventMarketItem {
+  id: string;
+  title: string;
+  currentPrice: number;
+  priceYes: number;
+  priceNo: number;
+  volume: number;
+  url: string;
+}
+
+interface EventPageDataProps {
+  eventName: string;
+  eventSlug: string;
+  markets: EventMarketItem[];
+  marketCount: number;
+}
+
+function EventPageUI(props: { eventData: EventPageDataProps }) {
+  const { eventData } = props;
+  const [selectedMarkets, setSelectedMarkets] = useState<{ [key: string]: boolean }>({});
+  const [stopPrice, setStopPrice] = useState('');
+  const [coordinationMode, setCoordinationMode] = useState<'independent' | 'family'>('independent');
+  const [settingStops, setSettingStops] = useState(false);
+  const [message, setMessage] = useState('');
+
+  // Pre-select all markets
+  useEffect(() => {
+    const selected: { [key: string]: boolean } = {};
+    eventData.markets.forEach((market) => {
+      selected[market.id] = true;
+    });
+    setSelectedMarkets(selected);
+  }, [eventData]);
+
+  const getSelectedCount = () => {
+    return Object.values(selectedMarkets).filter((v) => v).length;
+  };
+
+  const handleSetStops = async () => {
+    if (!stopPrice || parseFloat(stopPrice) <= 0) {
+      setMessage('Please enter a valid stop price');
+      return;
+    }
+
+    const selectedIds = Object.keys(selectedMarkets).filter((id) => selectedMarkets[id]);
+    if (selectedIds.length === 0) {
+      setMessage('Please select at least one market');
+      return;
+    }
+
+    setSettingStops(true);
+    setMessage(`Setting stops on ${selectedIds.length} market(s)...`);
+
+    chrome.runtime.sendMessage(
+      {
+        type: 'BULK_SET_STOPS',
+        stops: selectedIds.map((marketId) => {
+          const market = eventData.markets.find((m) => m.id === marketId);
+          return {
+            marketId,
+            marketName: market?.title || 'Unknown Market',
+            stopPrice: parseFloat(stopPrice),
+            currentPrice: market?.currentPrice || 0,
+          };
+        }),
+        coordinationMode,
+      },
+      (result) => {
+        if (result) {
+          setMessage(`Successfully set stops on ${selectedIds.length} market(s)!`);
+          setStopPrice('');
+          setTimeout(() => setMessage(''), 3000);
+        } else {
+          setMessage('Failed to set stops');
+        }
+        setSettingStops(false);
+      }
+    );
+  };
+
+  return (
+    <div className="popup-container">
+      <header className="header">
+        <h1>🎩 PolyGuard Event</h1>
+        <p className="version">{eventData.eventName}</p>
+      </header>
+
+      <section className="market-section" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+        <h3>Markets ({getSelectedCount()} of {eventData.marketCount})</h3>
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+          <button
+            onClick={() => {
+              const all: { [key: string]: boolean } = {};
+              eventData.markets.forEach((m) => (all[m.id] = true));
+              setSelectedMarkets(all);
+            }}
+            style={{
+              padding: '4px 8px',
+              fontSize: '11px',
+              background: 'rgba(59, 130, 246, 0.2)',
+              color: '#60a5fa',
+              border: '1px solid rgba(59, 130, 246, 0.3)',
+              borderRadius: '3px',
+              cursor: 'pointer',
+            }}
+          >
+            Select All
+          </button>
+          <button
+            onClick={() => setSelectedMarkets({})}
+            style={{
+              padding: '4px 8px',
+              fontSize: '11px',
+              background: 'rgba(59, 130, 246, 0.2)',
+              color: '#60a5fa',
+              border: '1px solid rgba(59, 130, 246, 0.3)',
+              borderRadius: '3px',
+              cursor: 'pointer',
+            }}
+          >
+            Clear
+          </button>
+        </div>
+        {eventData.markets.map((market) => (
+          <label
+            key={market.id}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '6px',
+              background: selectedMarkets[market.id] ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.05)',
+              borderRadius: '4px',
+              marginBottom: '4px',
+              cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={selectedMarkets[market.id] || false}
+              onChange={(e) => setSelectedMarkets({ ...selectedMarkets, [market.id]: e.target.checked })}
+            />
+            <span style={{ fontSize: '11px' }}>
+              {market.title.substring(0, 50)}... (${market.currentPrice.toFixed(2)})
+            </span>
+          </label>
+        ))}
+      </section>
+
+      <section className="config-section">
+        <h3>Set Stop Price</h3>
+        <div className="form-group">
+          <label>Stop Price ($)</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            max="1"
+            value={stopPrice}
+            onChange={(e) => setStopPrice(e.target.value)}
+            placeholder="Enter stop price"
+            className="price-input"
+          />
+        </div>
+
+        <div className="form-group">
+          <label>Coordination Mode</label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '4px' }}>
+            <input
+              type="radio"
+              name="coordination"
+              value="independent"
+              checked={coordinationMode === 'independent'}
+              onChange={(e) => setCoordinationMode('independent')}
+            />
+            Independent
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
+            <input
+              type="radio"
+              name="coordination"
+              value="family"
+              checked={coordinationMode === 'family'}
+              onChange={(e) => setCoordinationMode('family')}
+            />
+            Family (if one hits, close all)
+          </label>
+        </div>
+
+        {message && (
+          <div style={{ padding: '8px', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '4px', marginBottom: '8px', fontSize: '11px', color: '#93c5fd' }}>
+            {message}
+          </div>
+        )}
+
+        <button
+          onClick={handleSetStops}
+          disabled={!stopPrice || getSelectedCount() === 0 || settingStops}
+          className="btn-primary"
+          style={{ cursor: settingStops ? 'not-allowed' : 'pointer', opacity: (!stopPrice || getSelectedCount() === 0 || settingStops) ? 0.5 : 1 }}
+        >
+          {settingStops ? 'Setting...' : `Set Stops on ${getSelectedCount()} 🎯`}
+        </button>
+      </section>
+    </div>
+  );
+}
+
 interface MarketData {
   marketId: string;
   marketName: string;
@@ -19,6 +228,8 @@ interface Order {
 }
 
 export function Popup() {
+  const [isEventPage, setIsEventPage] = useState(false);
+  const [eventData, setEventData] = useState<any>(null);
   const [marketData, setMarketData] = useState<MarketData | null>(null);
   const [stopPrice, setStopPrice] = useState('');
   const [suggestedStop, setSuggestedStop] = useState('');
@@ -34,32 +245,53 @@ export function Popup() {
       const tab = tabs[0];
       if (tab.url?.includes('polymarket.com')) {
         setIsPolymarket(true);
-        setManualMode(false);
+        
+        // Check if on event page
+        if (tab.url?.includes('/event/')) {
+          setIsEventPage(true);
+          
+          // Request event data from content script
+          if (tab.id) {
+            chrome.tabs.sendMessage(
+              tab.id,
+              { action: 'getEventData' },
+              (response) => {
+                if (response?.eventData) {
+                  setEventData(response.eventData);
+                }
+                setLoading(false);
+              }
+            );
+          }
+        } else {
+          setIsEventPage(false);
+          setManualMode(false);
 
-        // Request market data from content script
-        if (tab.id) {
-          chrome.tabs.sendMessage(
-            tab.id,
-            { action: 'getMarketData' },
-            (response) => {
-              if (response?.marketData) {
-                const data = response.marketData;
-                setMarketData(data);
+          // Request market data from content script
+          if (tab.id) {
+            chrome.tabs.sendMessage(
+              tab.id,
+              { action: 'getMarketData' },
+              (response) => {
+                if (response?.marketData) {
+                  const data = response.marketData;
+                  setMarketData(data);
 
-                if (data.detected && data.currentPrice > 0) {
-                  // Suggest stop price: 10% below current price
-                  const suggested = (data.currentPrice * 0.9).toFixed(2);
-                  setSuggestedStop(suggested);
-                  setStopPrice(suggested);
+                  if (data.detected && data.currentPrice > 0) {
+                    // Suggest stop price: 10% below current price
+                    const suggested = (data.currentPrice * 0.9).toFixed(2);
+                    setSuggestedStop(suggested);
+                    setStopPrice(suggested);
+                  } else {
+                    setManualMode(true);
+                  }
                 } else {
                   setManualMode(true);
                 }
-              } else {
-                setManualMode(true);
+                setLoading(false);
               }
-              setLoading(false);
-            }
-          );
+            );
+          }
         }
       } else {
         setIsPolymarket(false);
@@ -153,6 +385,11 @@ export function Popup() {
         </div>
       </div>
     );
+  }
+
+  // Render event page UI if on event page
+  if (isEventPage && eventData) {
+    return <EventPageUI eventData={eventData} />;
   }
 
   return (

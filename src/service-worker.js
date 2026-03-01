@@ -26,6 +26,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
   
+  if (request.type === 'BULK_SET_STOPS') {
+    bulkSetStops(request.stops, request.coordinationMode, sendResponse);
+    return true; // Async response
+  }
+  
   if (request.type === 'PRICE_UPDATE') {
     handlePriceUpdate(request.marketId, request.price);
     sendResponse({ status: 'ok' });
@@ -103,5 +108,39 @@ function triggerAlert(order, triggerPrice) {
   
   chrome.notifications.create(notification, (notificationId) => {
     console.log('Alert triggered:', order.id, 'price:', triggerPrice);
+  });
+}
+
+// Bulk set stops for multiple markets (event page feature)
+function bulkSetStops(stops, coordinationMode, callback) {
+  chrome.storage.local.get(STORAGE_KEY, (result) => {
+    let orders = result[STORAGE_KEY] || [];
+    const familyId = coordinationMode === 'family' ? Date.now() : null;
+    const newOrders = [];
+
+    // Add each stop order
+    stops.forEach((stop) => {
+      const order = {
+        id: `${stop.marketId}-${Date.now()}`,
+        marketId: stop.marketId,
+        marketName: stop.marketName,
+        stopPrice: stop.stopPrice,
+        currentPrice: stop.currentPrice,
+        active: true,
+        createdAt: new Date().toISOString(),
+        coordinationMode,
+        familyId, // Group stop orders if family mode
+      };
+      newOrders.push(order);
+    });
+
+    // Merge with existing orders
+    orders = [...orders, ...newOrders];
+    
+    // Save updated orders
+    chrome.storage.local.set({ [STORAGE_KEY]: orders }, () => {
+      console.log(`Bulk set ${newOrders.length} stops in ${coordinationMode} mode`);
+      callback(true);
+    });
   });
 }

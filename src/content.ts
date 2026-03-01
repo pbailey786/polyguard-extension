@@ -10,6 +10,115 @@ interface MarketData {
   detected: boolean;
 }
 
+interface EventMarket {
+  id: string;
+  title: string;
+  currentPrice: number;
+  priceYes: number;
+  priceNo: number;
+  volume: number;
+  url: string;
+}
+
+interface EventPageData {
+  eventName: string;
+  eventSlug: string;
+  markets: EventMarket[];
+  marketCount: number;
+}
+
+// Check if on event page
+function isOnEventPage(): boolean {
+  const pathname = window.location.pathname;
+  return /^\/event\/[a-zA-Z0-9\-]+/.test(pathname);
+}
+
+// Get event slug from URL
+function getEventSlug(): string | null {
+  const match = window.location.pathname.match(/^\/event\/([a-zA-Z0-9\-]+)/);
+  return match ? match[1] : null;
+}
+
+// Get event name from slug
+function getEventNameFromSlug(slug: string): string {
+  return slug
+    .split('-')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+// Fetch related markets for event
+async function fetchEventMarkets(eventSlug: string): Promise<EventMarket[]> {
+  try {
+    const searchTerms = eventSlug
+      .split('-')
+      .filter((word) => !['of', 'by', 'on', 'in', 'the', 'a', 'an'].includes(word.toLowerCase()))
+      .slice(0, 3)
+      .join('+');
+
+    const response = await fetch(
+      `https://clob.polymarket.com/markets?search=${searchTerms}&limit=100`
+    );
+
+    if (!response.ok) {
+      console.error('Failed to fetch markets:', response.status);
+      return [];
+    }
+
+    const data = await response.json();
+    if (!Array.isArray(data)) {
+      return [];
+    }
+
+    return data
+      .filter((market: any) => market.active && !market.closed)
+      .map((market: any) => transformMarketData(market))
+      .filter((market) => market !== null) as EventMarket[];
+  } catch (error) {
+    console.error('Error fetching event markets:', error);
+    return [];
+  }
+}
+
+// Transform raw market data
+function transformMarketData(market: any): EventMarket | null {
+  try {
+    let priceYes = 0;
+    let priceNo = 0;
+
+    if (Array.isArray(market.tokens) && market.tokens.length >= 2) {
+      const yesToken = market.tokens.find((t: any) => t.outcome?.toLowerCase() === 'yes');
+      const noToken = market.tokens.find((t: any) => t.outcome?.toLowerCase() === 'no');
+
+      if (yesToken && yesToken.price !== undefined) {
+        priceYes = parseFloat(yesToken.price);
+      }
+      if (noToken && noToken.price !== undefined) {
+        priceNo = parseFloat(noToken.price);
+      }
+    }
+
+    const currentPrice = priceYes > 0 ? priceYes : priceNo > 0 ? priceNo : 0;
+
+    if (!market.question_id || !market.question || currentPrice === 0) {
+      return null;
+    }
+
+    return {
+      id: market.condition_id || market.question_id,
+      title: market.question,
+      currentPrice,
+      priceYes,
+      priceNo,
+      volume: market.rewards?.max_size || 0,
+      url: `/markets/${market.condition_id || market.question_id}`,
+    };
+  } catch (error) {
+    console.error('Error transforming market:', error);
+    return null;
+  }
+}
+
 // Detect market data from page
 function detectMarketData(): MarketData {
   const defaultData: MarketData = {
@@ -120,8 +229,41 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const marketData = detectMarketData();
     console.log('Market data detected:', marketData);
     sendResponse({ marketData });
+  } else if (request.action === 'getEventData') {
+    handleGetEventData(sendResponse);
+    return true; // Indicate async response
   }
 });
+
+// Handle event data request
+async function handleGetEventData(sendResponse: (response: any) => void) {
+  try {
+    if (!isOnEventPage()) {
+      sendResponse({ eventData: null });
+      return;
+    }
+
+    const slug = getEventSlug();
+    if (!slug) {
+      sendResponse({ eventData: null });
+      return;
+    }
+
+    const markets = await fetchEventMarkets(slug);
+    const eventData: EventPageData = {
+      eventName: getEventNameFromSlug(slug),
+      eventSlug: slug,
+      markets,
+      marketCount: markets.length,
+    };
+
+    console.log('Event data:', eventData);
+    sendResponse({ eventData });
+  } catch (error) {
+    console.error('Error getting event data:', error);
+    sendResponse({ eventData: null });
+  }
+}
 
 // Optional: Watch for page changes and notify background
 const observer = new MutationObserver(() => {
